@@ -5,7 +5,7 @@ import torch.nn.functional as F
 
 from nanomoe.model.moe.router import Router
 from nanomoe.model.moe.experts import ExpertsMLP
-from nanomoe.model.moe.dispatch import capacity, dispatch_tokens, combine_expert_outputs
+from nanomoe.model.moe.dispatch import compute_capacity, dispatch_tokens_vectorized, combine_expert_outputs_vectorized
 from nanomoe.precision.fp8 import fp8_expert_context
 
 class RMSNorm(nn.Module):
@@ -64,8 +64,7 @@ class MoEBlock(nn.Module):
         self.moe_cfg = moe_cfg
         self.precision_cfg = precision_cfg
 
-
-        def forward(self, x):
+    def forward(self, x):
         B, S, D = x.shape
         T = B * S
 

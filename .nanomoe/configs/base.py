@@ -1,5 +1,5 @@
 # nanomoe/configs/base.py
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 @dataclass
@@ -48,9 +48,9 @@ class TrainConfig:
     n_heads: int = 16
     mlp_ratio: float = 4.0
 
-    moe: MoEConfig = MoEConfig()
-    attn: AttnConfig = AttnConfig()
-    precision: PrecisionConfig = PrecisionConfig()
+    moe: MoEConfig = field(default_factory=MoEConfig)
+    attn: AttnConfig = field(default_factory=AttnConfig)
+    precision: PrecisionConfig = field(default_factory=PrecisionConfig)
 
     global_batch_size: int = 256
     micro_batch_size: int = 8

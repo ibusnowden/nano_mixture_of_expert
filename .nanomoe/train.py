@@ -11,7 +11,7 @@ from nanomoe.configs.base import TrainConfig
 from nanomoe.model.transformer import TransformerLM
 from nanomoe.optim.registry import build_optimizer
 from nanomoe.logging.nviz import aggregate_router_stats
-from nanomoe.data.packed_memmap import PackedMemMapDataset
+from nanomoe.data.packer import PackedMemMapDataset
 from nanomoe.logging.wandb import init_wandb, log_step
 
 def ddp_init():
