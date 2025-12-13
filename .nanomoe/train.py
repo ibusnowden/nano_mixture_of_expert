@@ -2,6 +2,7 @@
 #(DDP + explicit step + router stats + fp8 hooks)
 # nanomoe/train.py
 import os, time, math
+from contextlib import nullcontext
 import torch
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -35,6 +36,7 @@ def main():
     cfg = TrainConfig()
     ddp, rank, local_rank, world = ddp_init()
     device = torch.device("cuda", local_rank) if torch.cuda.is_available() else torch.device("cpu")
+    init_wandb(cfg, rank)
 
     torch.manual_seed(cfg.seed + rank)
 
@@ -49,7 +51,8 @@ def main():
         model = DDP(model, device_ids=[local_rank], broadcast_buffers=False, find_unused_parameters=False)
 
     opt = build_optimizer(cfg, model)
-    scaler = torch.cuda.amp.GradScaler(enabled=cfg.precision.amp_bf16)
+    use_amp = cfg.precision.amp_bf16 and device.type == "cuda"
+    scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
 
     model.train()
     step = 0
@@ -65,6 +68,7 @@ def main():
         loss_accum = 0.0
         router_log = None
 
+        last_moe_stats_layers = None
         for micro in range(cfg.grad_accum_steps):
             try:
                 batch = next(it)
@@ -76,7 +80,7 @@ def main():
             x = batch[:, :-1]
             y = batch[:, 1:]
 
-            with torch.cuda.amp.autocast(enabled=cfg.precision.amp_bf16, dtype=torch.bfloat16):
+            with (torch.cuda.amp.autocast(enabled=True, dtype=torch.bfloat16) if use_amp else nullcontext()):
                 logits, moe_stats_layers = model(x)  # logits [B,S-1,V]
                 loss = torch.nn.functional.cross_entropy(
                     logits.reshape(-1, logits.size(-1)),
@@ -92,6 +96,7 @@ def main():
 
             loss_accum += loss.item()
             router_log = aggregate_router_stats(moe_stats_layers)
+            last_moe_stats_layers = moe_stats_layers
 
         # optional: clip (explicit; default None for “YOLO”)
         if cfg.grad_clip_norm is not None:
@@ -115,14 +120,26 @@ def main():
                 loss_mean = loss_accum
                 tok_s_mean = tok_s
 
+            scalars = {
+                "step": float(step),
+                "loss": float(loss_mean),
+                "tok_s": float(tok_s_mean),
+                **{k: float(v) if isinstance(v, float) else v for k, v in router_log.items()},
+            }
             if rank == 0:
-                msg = {
+                pretty = {
                     "step": step,
                     "loss": round(loss_mean, 4),
                     "tok/s": round(tok_s_mean, 1),
                     **{k: (round(v, 4) if isinstance(v, float) else v) for k, v in router_log.items()},
                 }
-                print(msg)
+                print(pretty)
+            log_step(
+                step=step,
+                rank=rank,
+                scalars=scalars,
+                moe_stats_layers=last_moe_stats_layers,
+            )
 
         step += 1
 

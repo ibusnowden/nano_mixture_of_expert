@@ -7,6 +7,7 @@ from nanomoe.model.moe.router import Router
 from nanomoe.model.moe.experts import ExpertsMLP
 from nanomoe.model.moe.dispatch import compute_capacity, dispatch_tokens_vectorized, combine_expert_outputs_vectorized
 from nanomoe.precision.fp8 import fp8_expert_context
+from nanomoe.model.attention.base import build_attention
 
 class RMSNorm(nn.Module):
     def __init__(self, d, eps=1e-6):
@@ -15,32 +16,6 @@ class RMSNorm(nn.Module):
         self.eps = eps
     def forward(self, x):
         return x * torch.rsqrt(x.pow(2).mean(dim=-1, keepdim=True) + self.eps) * self.w
-
-class CausalSelfAttention(nn.Module):
-    def __init__(self, d_model, n_heads):
-        super().__init__()
-        assert d_model % n_heads == 0
-        self.n_heads = n_heads
-        self.head_dim = d_model // n_heads
-        self.qkv = nn.Linear(d_model, 3 * d_model, bias=False)
-        self.proj = nn.Linear(d_model, d_model, bias=False)
-
-    def forward(self, x):
-        B, S, D = x.shape
-        qkv = self.qkv(x).view(B, S, 3, self.n_heads, self.head_dim)
-        q, k, v = qkv[:, :, 0], qkv[:, :, 1], qkv[:, :, 2]  # [B,S,H,hd]
-        q = q.transpose(1, 2)  # [B,H,S,hd]
-        k = k.transpose(1, 2)
-        v = v.transpose(1, 2)
-
-        att = (q @ k.transpose(-2, -1)) / (self.head_dim ** 0.5)  # [B,H,S,S]
-        mask = torch.triu(torch.ones(S, S, device=x.device, dtype=torch.bool), diagonal=1)
-        att = att.masked_fill(mask, float("-inf"))
-        att = F.softmax(att, dim=-1)
-
-        y = att @ v  # [B,H,S,hd]
-        y = y.transpose(1, 2).contiguous().view(B, S, D)
-        return self.proj(y)
 
 class MoEBlock(nn.Module):
     def __init__(self, d_model, hidden, moe_cfg, precision_cfg):
@@ -96,6 +71,7 @@ class MoEBlock(nn.Module):
         y = y_flat.view(B, S, D)
 
         stats = {**r_stats, **e_stats}
+        stats["router_counts_vec"] = r_stats["router_counts"]
 
         # executed routing metrics (THIS prevents fake stability)
         stats["expert_cap"] = aux["cap"].detach()
@@ -104,10 +80,12 @@ class MoEBlock(nn.Module):
         stats["expert_fill_mean"] = aux["expert_fill"].float().mean().detach()
         stats["expert_fill_min"] = aux["expert_fill"].float().min().detach()
         stats["expert_fill_max"] = aux["expert_fill"].float().max().detach()
+        stats["exec_expert_fill_vec"] = aux["expert_fill"].detach()
 
         stats["expert_mass_mean"] = aux["expert_mass"].float().mean().detach()
         stats["expert_mass_min"] = aux["expert_mass"].float().min().detach()
         stats["expert_mass_max"] = aux["expert_mass"].float().max().detach()
+        stats["exec_expert_mass_vec"] = aux["expert_mass"].detach()
 
         if "keep_rate_k" in aux:
             # log first two for K=2; extend if you like
@@ -120,10 +98,10 @@ class MoEBlock(nn.Module):
 
 
 class Block(nn.Module):
-    def __init__(self, d_model, n_heads, hidden, moe_cfg, precision_cfg):
+    def __init__(self, d_model, n_heads, hidden, moe_cfg, precision_cfg, attn_cfg):
         super().__init__()
         self.n1 = RMSNorm(d_model)
-        self.attn = CausalSelfAttention(d_model, n_heads)
+        self.attn = build_attention(attn_cfg.kind, d_model, n_heads)
         self.n2 = RMSNorm(d_model)
         self.moe = MoEBlock(d_model, hidden, moe_cfg, precision_cfg)
 
@@ -142,7 +120,7 @@ class TransformerLM(nn.Module):
         hidden = int(cfg.d_model * cfg.mlp_ratio)
 
         self.blocks = nn.ModuleList([
-            Block(cfg.d_model, cfg.n_heads, hidden, cfg.moe, cfg.precision)
+            Block(cfg.d_model, cfg.n_heads, hidden, cfg.moe, cfg.precision, cfg.attn)
             for _ in range(cfg.n_layers)
         ])
         self.norm = RMSNorm(cfg.d_model)
