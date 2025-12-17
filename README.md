@@ -9,3 +9,6 @@ If k1 is lower, top-2 is silently degenerating.
 exec/mass_min_min should move away from ~0 over time (otherwise “second expert never learns”).
 
 If router entropy stays ~max but top1_margin never increases and mass stays flat, you’re stable but under-specializing.
+
+
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/ibusnowden/nano_mixture_of_expert)
