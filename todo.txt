@@ -1,0 +1,4 @@
+This repository can be enhanced with speed optimizations by integrating advanced parallelism techniques and optimized kernels in several key areas. The current implementation uses basic PyTorch DDP and standard operations, leaving significant room for performance improvements.
+
+Quick Summary
+The main enhancement opportunities are: 1) Replace basic DDP with DeepSpeed/Megatron for ZeRO optimization and better memory efficiency, 2) Add tensor/pipeline parallelism to scale beyond single GPU memory limits, 3) Implement real FP8 support instead of the current placeholder, 4) Add fused kernels for attention and expert operations, and 5) Integrate with TorchTitan for advanced training orchestration.
